@@ -1,0 +1,17 @@
+[package]
+name = "poor-mans-binfmt-misc"
+version = "0.1.0"
+authors = ["kalmari"]
+edition = "2018"
+
+[dependencies]
+ffi-support = "*"
+goblin = "*"
+itertools = "*"
+libc = "*"
+path-dsl = "*"
+va_list = "*"
+
+[lib]
+name = "pmbm"
+crate_type = ["dylib"]
