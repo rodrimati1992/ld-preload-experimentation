@@ -22,15 +22,13 @@ impl VaListArgvExt for VaList {
     fn into_vec(&mut self) -> Vec<String> {
         let mut buffer = Vec::new();
 
-        unsafe {
-            loop {
-                let ptr = self.get::<*const c_char>();
+        loop {
+            let ptr = unsafe { self.get::<*const c_char>() };
 
-                if !ptr.is_null() {
-                    buffer.push(CStr::from_ptr(ptr).to_string_lossy().to_string());
-                } else {
-                    break;
-                }
+            if !ptr.is_null() {
+                buffer.push(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().to_string());
+            } else {
+                break;
             }
         }
 
@@ -64,15 +62,15 @@ impl<'a> Argv<'a> {
         let mut i = 0isize;
         let mut buffer = Vec::new();
 
-        unsafe {
-            loop {
-                match self.data.offset(i).as_ref() {
-                    Some(&val) => buffer.push(CStr::from_ptr(val).to_string_lossy().to_string()),
-                    None => break,
+        loop {
+            match unsafe { self.data.offset(i).as_ref() } {
+                Some(&val) => {
+                    buffer.push(unsafe { CStr::from_ptr(val) }.to_string_lossy().to_string())
                 }
-
-                i += 1;
+                None => break,
             }
+
+            i += 1;
         }
 
         buffer
@@ -120,35 +118,43 @@ impl<'a> Envp<'a> {
 
 #[no_mangle]
 pub unsafe extern "C" fn execl(path: CPath, mut argv: VaList) -> ! {
+    println!("execl");
     exec(path.to_path_buf(), argv.into_vec(), env::vars().collect())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn execlp(path: CPath, mut argv: VaList) -> ! {
+    println!("execlp");
     exec(path.to_path_buf(), argv.into_vec(), env::vars().collect())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn execle(path: CPath, mut argv: VaList, envp: Envp) -> ! {
+    println!("execle");
     exec(path.to_path_buf(), argv.into_vec(), envp.to_hash_map())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn execv(path: CPath, argv: Argv) -> ! {
+    println!("execv");
     exec(path.to_path_buf(), argv.to_vec(), env::vars().collect())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn execvp(path: CPath, argv: Argv) -> ! {
+    println!("execvp");
     exec(path.to_path_buf(), argv.to_vec(), env::vars().collect())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn execvpe(path: CPath, argv: Argv, envp: Envp) -> ! {
+    println!("execvpe");
     exec(path.to_path_buf(), argv.to_vec(), envp.to_hash_map())
 }
 
 fn exec(program: PathBuf, mut args: Vec<String>, mut env: HashMap<String, String>) -> ! {
+    println!("exec: {:?} {}", program, args.join(" "));
+
     let mut file = File::open(&program).unwrap();
     let mut buffer = Vec::new();
 
@@ -160,17 +166,10 @@ fn exec(program: PathBuf, mut args: Vec<String>, mut env: HashMap<String, String
     };
 
     let arch = match elf.header.e_machine {
-        //0x2 => "sparc",
-        0x3 => "x86",
-        //0x8 => "mips",
-        //0x14 => "powerpc",
-        //0x16 => "s390",
-        0x28 => "arm",
-        //0x2A => "superh",
-        //0x32 => "ia-64",
+        0x03 => "x86",
         0x3E => "x86_64",
+        0x28 => "arm",
         0xB7 => "aarch64",
-        //0xF3 => "risc-v",
         _ => panic!(),
     };
 
