@@ -36,18 +36,33 @@ impl VaListArgvExt for VaList {
     }
 }
 
+pub enum PathOrFile {
+    File(String),
+    Path(PathBuf),
+}
+
 #[repr(transparent)]
-pub struct CPath<'a> {
+pub struct CBuf<'a> {
     data: *mut c_char,
     _ghost: PhantomData<&'a ()>,
 }
 
-impl<'a> CPath<'a> {
-    pub fn to_path_buf(&self) -> PathBuf {
-        unsafe { CStr::from_ptr(self.data) }
-            .to_string_lossy()
-            .to_string()
-            .into()
+impl<'a> CBuf<'a> {
+    pub fn to_file(&self) -> PathOrFile {
+        PathOrFile::File(
+            unsafe { CStr::from_ptr(self.data) }
+                .to_string_lossy()
+                .to_string(),
+        )
+    }
+
+    pub fn to_path(&self) -> PathOrFile {
+        PathOrFile::Path(
+            unsafe { CStr::from_ptr(self.data) }
+                .to_string_lossy()
+                .to_string()
+                .into(),
+        )
     }
 }
 
@@ -109,60 +124,64 @@ impl<'a> Envp<'a> {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn execl(path: CPath, mut argv: VaList) -> ! {
-    println!("execl");
-    exec(path.to_path_buf(), argv.into_vec(), env::vars().collect())
+pub unsafe extern "C" fn execl(path: CBuf, mut argv: VaList) -> ! {
+    print!("execl");
+    exec(path.to_path(), argv.into_vec(), env::vars().collect())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn execlp(path: CPath, mut argv: VaList) -> ! {
-    println!("execlp");
-    exec(path.to_path_buf(), argv.into_vec(), env::vars().collect())
+pub unsafe extern "C" fn execlp(path: CBuf, mut argv: VaList) -> ! {
+    print!("execlp");
+    exec(path.to_file(), argv.into_vec(), env::vars().collect())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn execle(path: CPath, mut argv: VaList, envp: Envp) -> ! {
-    println!("execle");
-    exec(path.to_path_buf(), argv.into_vec(), envp.to_hash_map())
+pub unsafe extern "C" fn execle(path: CBuf, mut argv: VaList, envp: Envp) -> ! {
+    print!("execle");
+    exec(path.to_path(), argv.into_vec(), envp.to_hash_map())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn execv(path: CPath, argv: Argv) -> ! {
-    println!("execv");
-    exec(path.to_path_buf(), argv.to_vec(), env::vars().collect())
+pub unsafe extern "C" fn execv(path: CBuf, argv: Argv) -> ! {
+    print!("execv");
+    exec(path.to_path(), argv.to_vec(), env::vars().collect())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn execvp(path: CPath, argv: Argv) -> ! {
-    println!("execvp");
-    exec(path.to_path_buf(), argv.to_vec(), env::vars().collect())
+pub unsafe extern "C" fn execvp(path: CBuf, argv: Argv) -> ! {
+    print!("execvp");
+    exec(path.to_file(), argv.to_vec(), env::vars().collect())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn execvpe(path: CPath, argv: Argv, envp: Envp) -> ! {
-    println!("execvpe");
-    exec(path.to_path_buf(), argv.to_vec(), envp.to_hash_map())
+pub unsafe extern "C" fn execvpe(path: CBuf, argv: Argv, envp: Envp) -> ! {
+    print!("execvpe");
+    exec(path.to_file(), argv.to_vec(), envp.to_hash_map())
 }
 
-fn exec(program: PathBuf, mut args: Vec<String>, mut env: HashMap<String, String>) -> ! {
-    println!("exec: {:?} {}", program, args.join(" "));
-
-    let mut file = File::open(&program).unwrap();
-    let mut buffer = Vec::new();
-
-    file.read_to_end(&mut buffer).unwrap();
-
-    let elf = match Object::parse(&buffer).unwrap() {
-        Object::Elf(elf) => elf,
-        _ => panic!(),
+fn exec(program: PathOrFile, mut args: Vec<String>, mut env: HashMap<String, String>) -> ! {
+    let program = match program {
+        PathOrFile::File(file) => which::which(file).expect("cannot find program"),
+        PathOrFile::Path(path) => path,
     };
 
-    let arch = match elf.header.e_machine {
-        0x03 => "x86",
-        0x3E => "x86_64",
-        0x28 => "arm",
-        0xB7 => "aarch64",
-        _ => panic!(),
+    println!(": {:?}", program);
+    println!("    args: {}", args.join(" "));
+
+    let mut file = File::open(&program).expect("failed open file");
+    let mut buffer = Vec::new();
+
+    file.read_to_end(&mut buffer).expect("failed to read elf");
+
+    let arch = match Object::parse(&buffer).expect("unable to parse elf") {
+        Object::Elf(elf) => match elf.header.e_machine {
+            0x03 => "x86",
+            0x3E => "x86_64",
+            0x28 => "arm",
+            0xB7 => "aarch64",
+            _ => panic!("invalid architecture"),
+        },
+        _ => panic!("cannot execute"),
     };
 
     let target_path = if arch == env::consts::ARCH {
@@ -180,6 +199,9 @@ fn exec(program: PathBuf, mut args: Vec<String>, mut env: HashMap<String, String
 
         format!("qemu-{}-static", arch)
     };
+
+    println!("    post-exec: {:?}", program);
+    println!("    post-args: {}", args.join(" "));
 
     let argv0 = CString::new(target_path).unwrap().as_ptr() as *const c_char;
 

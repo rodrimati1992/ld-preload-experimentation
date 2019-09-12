@@ -10,6 +10,7 @@ itertools = "*"
 libc = "*"
 path-dsl = "*"
 va_list = "*"
+which = "*"
 
 [lib]
 name = "pmbm"
