@@ -148,6 +148,12 @@ pub unsafe extern "C" fn execv(path: CBuf, argv: Argv) -> ! {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn execve(path: CBuf, argv: Argv, envp: Envp) -> ! {
+    print!("execve");
+    exec(path.to_path(), argv.to_vec(), envp.to_hash_map())
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn execvp(path: CBuf, argv: Argv) -> ! {
     print!("execvp");
     exec(path.to_file(), argv.to_vec(), env::vars().collect())
@@ -231,7 +237,7 @@ fn exec(program: PathOrFile, mut args: Vec<String>, mut env: HashMap<String, Str
             >,
         >(libc::dlsym(
             libc::RTLD_NEXT as *mut _,
-            "execvpe\0".as_ptr() as *const _,
+            "execve\0".as_ptr() as *const _,
         ))
         .unwrap()(argv0, argv, envp)
     }
