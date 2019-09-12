@@ -1,6 +1,6 @@
 use goblin::Object;
 use itertools::Itertools;
-use libc::c_char;
+use libc::{c_char, c_int};
 use libloading::os::unix::{Library, Symbol};
 use path_dsl::path;
 use std::{
@@ -86,7 +86,7 @@ impl<'a> Envp<'a> {
 }
 
 #[no_mangle]
-pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) {
+pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) -> c_int {
     let path = path.to_path();
     let mut args = args.to_vec();
     let mut env = env.to_map();
@@ -153,9 +153,13 @@ pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) {
 
     unsafe {
         let real: Symbol<
-            unsafe extern "C" fn(*const c_char, *const *const c_char, *const *const c_char) -> !,
+            unsafe extern "C" fn(
+                *const c_char,
+                *const *const c_char,
+                *const *const c_char,
+            ) -> c_int,
         > = this.get(b"execve\0").unwrap();
 
-        real(path, args, env);
+        real(path, args, env)
     }
 }
