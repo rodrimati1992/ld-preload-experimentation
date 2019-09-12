@@ -148,8 +148,8 @@ pub unsafe extern "C" fn execvpe(file: FfiStr, argv: CArray<FfiStr>, envp: CArra
     )
 }
 
-fn exec(program: PathBuf, args: Vec<String>, mut env: HashMap<String, String>) -> ! {
-    let mut file = File::open(program).unwrap();
+fn exec(program: PathBuf, mut args: Vec<String>, mut env: HashMap<String, String>) -> ! {
+    let mut file = File::open(&program).unwrap();
     let mut buffer = Vec::new();
 
     file.read_to_end(&mut buffer).unwrap();
@@ -180,13 +180,13 @@ fn exec(program: PathBuf, args: Vec<String>, mut env: HashMap<String, String>) -
         let sysroot = path!("opt" | "pmbm" | arch);
         let qemu_ld_prefix = path!(sysroot | "lib");
 
-        args.insert(0, format!("{}", program.display());
+        args.insert(0, format!("{}", program.display()));
 
         env.insert(
             "QEMU_LD_PREFIX".to_owned(),
             format!("{}", qemu_ld_prefix.into_pathbuf().display()),
         );
-        
+
         format!("qemu-{}-static", arch)
     };
 
