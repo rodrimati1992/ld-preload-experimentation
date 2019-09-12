@@ -1,15 +1,15 @@
 use goblin::Object;
 use itertools::Itertools;
 use libc::c_char;
+use libloading::os::unix::{Library, Symbol};
 use path_dsl::path;
 use std::{
     collections::HashMap,
     env,
-    ffi::{self, CStr, CString},
+    ffi::{CStr, CString},
     fs::File,
     io::Read,
     marker::PhantomData,
-    mem,
     path::PathBuf,
 };
 
@@ -86,7 +86,7 @@ impl<'a> Envp<'a> {
 }
 
 #[no_mangle]
-pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) -> ! {
+pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) {
     let path = path.to_path();
     let mut args = args.to_vec();
     let mut env = env.to_map();
@@ -114,16 +114,18 @@ pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) -> ! {
         path
     } else {
         let sysroot = path!("opt" | "pmbm" | arch);
+        let qemu =
+            which::which(format!("qemu-{}-static", arch)).expect("please install qemu-user-static");
         let qemu_ld_prefix = path!(sysroot | "lib");
 
-        args.insert(0, format!("{}", path.display()));
+        args.insert(0, format!("{}", qemu.display()));
 
         env.insert(
             "QEMU_LD_PREFIX".to_owned(),
             format!("{}", qemu_ld_prefix.into_pathbuf().display()),
         );
 
-        which::which(format!("qemu-{}-static", arch)).expect("please install qemu-user-static")
+        qemu
     };
 
     println!("post-inject-path: {}", path.display());
@@ -147,20 +149,13 @@ pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) -> ! {
         .collect::<Vec<*const c_char>>()
         .as_ptr() as *const *const c_char;
 
+    let this = Library::this();
+
     unsafe {
-        mem::transmute::<
-            *const ffi::c_void,
-            Option<
-                unsafe extern "C" fn(
-                    *const c_char,
-                    *const *const c_char,
-                    *const *const c_char,
-                ) -> !,
-            >,
-        >(libc::dlsym(
-            libc::RTLD_NEXT as *mut _,
-            "execve\0".as_ptr() as *const _,
-        ))
-        .unwrap()(path, args, env)
+        let real: Symbol<
+            unsafe extern "C" fn(*const c_char, *const *const c_char, *const *const c_char) -> !,
+        > = this.get(b"execve\0").unwrap();
+
+        real(path, args, env);
     }
 }
