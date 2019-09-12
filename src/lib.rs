@@ -1,4 +1,3 @@
-use ffi_support::FfiStr;
 use goblin::Object;
 use itertools::Itertools;
 use libc::c_char;
@@ -6,7 +5,7 @@ use path_dsl::path;
 use std::{
     collections::HashMap,
     env,
-    ffi::{self, CString},
+    ffi::{self, CStr, CString},
     fs::File,
     io::Read,
     marker::PhantomData,
@@ -15,18 +14,23 @@ use std::{
 };
 use va_list::VaList;
 
-trait VaListExt {
-    fn into_vec<T: 'static, U, F: Fn(&T) -> U>(&mut self, transform: F) -> Vec<U>;
+trait VaListArgvExt {
+    fn into_vec(&mut self) -> Vec<String>;
 }
 
-impl VaListExt for VaList {
-    fn into_vec<T: 'static, U, F: Fn(&T) -> U>(&mut self, transform: F) -> Vec<U> {
+impl VaListArgvExt for VaList {
+    fn into_vec(&mut self) -> Vec<String> {
         let mut buffer = Vec::new();
 
-        loop {
-            match unsafe { self.get::<*const T>().as_ref() } {
-                Some(val) => buffer.push(transform(val)),
-                None => break,
+        unsafe {
+            loop {
+                let ptr = self.get::<*const c_char>();
+
+                if !ptr.is_null() {
+                    buffer.push(CStr::from_ptr(ptr).to_string_lossy().to_string());
+                } else {
+                    break;
+                }
             }
         }
 
@@ -35,117 +39,113 @@ impl VaListExt for VaList {
 }
 
 #[repr(transparent)]
-pub struct CArray<'a, T> {
-    ptr: *mut T,
-    _boo: PhantomData<&'a ()>,
+pub struct CPath<'a> {
+    data: *mut c_char,
+    _ghost: PhantomData<&'a ()>,
 }
 
-impl<'a, T> CArray<'a, T> {
-    pub fn to_vec<U, F: Fn(&T) -> U>(&self, transform: F) -> Vec<U> {
+impl<'a> CPath<'a> {
+    pub fn to_path_buf(&self) -> PathBuf {
+        unsafe { CStr::from_ptr(self.data) }
+            .to_string_lossy()
+            .to_string()
+            .into()
+    }
+}
+
+#[repr(transparent)]
+pub struct Argv<'a> {
+    data: *const *mut c_char,
+    _ghost: PhantomData<&'a ()>,
+}
+
+impl<'a> Argv<'a> {
+    pub fn to_vec(&self) -> Vec<String> {
         let mut i = 0isize;
         let mut buffer = Vec::new();
 
-        loop {
-            match unsafe { (self.ptr.offset(i) as *mut T).as_ref() } {
-                Some(val) => buffer.push(transform(val)),
-                None => break,
-            }
+        unsafe {
+            loop {
+                match self.data.offset(i).as_ref() {
+                    Some(&val) => buffer.push(CStr::from_ptr(val).to_string_lossy().to_string()),
+                    None => break,
+                }
 
-            i += 1;
+                i += 1;
+            }
         }
 
         buffer
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn execl(path: FfiStr, mut argv: VaList) -> ! {
-    exec(
-        path.as_str().to_owned().into(),
-        argv.into_vec(|arg: &FfiStr| arg.as_str().to_owned()),
-        env::vars().collect(),
-    )
+#[repr(transparent)]
+pub struct Envp<'a> {
+    data: *const *mut c_char,
+    _ghost: PhantomData<&'a ()>,
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn execlp(file: FfiStr, mut argv: VaList) -> ! {
-    exec(
-        file.as_str().to_owned().into(),
-        argv.into_vec(|arg: &FfiStr| arg.as_str().to_owned()),
-        env::vars().collect(),
-    )
-}
+impl<'a> Envp<'a> {
+    pub fn to_hash_map(&self) -> HashMap<String, String> {
+        let mut i = 0isize;
+        let mut map = HashMap::new();
 
-#[no_mangle]
-pub unsafe extern "C" fn execle(file: FfiStr, mut argv: VaList, envp: CArray<FfiStr>) -> ! {
-    exec(
-        file.as_str().to_owned().into(),
-        argv.into_vec(|arg: &FfiStr| arg.as_str().to_owned()),
-        envp.to_vec(|env| {
-            let (key, value) = env
-                .as_str()
-                .to_owned()
-                .splitn(1, ':')
-                .map(|part| Some(part.to_owned()))
-                .tuples()
-                .next()
-                .unwrap_or((None, None));
+        unsafe {
+            loop {
+                match self.data.offset(i).as_ref() {
+                    Some(&val) => {
+                        let (key, val) = CString::from_raw(val)
+                            .to_string_lossy()
+                            .to_string()
+                            .splitn(1, ':')
+                            .map(|part| Some(part.to_owned()))
+                            .tuples()
+                            .next()
+                            .unwrap_or((None, None));
 
-            if key.is_some() && value.is_some() {
-                Some((key.unwrap(), value.unwrap()))
-            } else {
-                None
+                        if key.is_some() && val.is_some() {
+                            map.insert(key.unwrap(), val.unwrap());
+                        }
+                    }
+                    None => break,
+                }
+
+                i += 1;
             }
-        })
-        .into_iter()
-        .filter_map(|pair| pair)
-        .collect(),
-    )
+        }
+
+        map
+    }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn execv(path: FfiStr, argv: CArray<FfiStr>) -> ! {
-    exec(
-        path.as_str().to_owned().into(),
-        argv.to_vec(|arg| arg.as_str().to_owned()),
-        env::vars().collect(),
-    )
+pub unsafe extern "C" fn execl(path: CPath, mut argv: VaList) -> ! {
+    exec(path.to_path_buf(), argv.into_vec(), env::vars().collect())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn execvp(file: FfiStr, argv: CArray<FfiStr>) -> ! {
-    exec(
-        file.as_str().to_owned().into(),
-        argv.to_vec(|arg| arg.as_str().to_owned()),
-        env::vars().collect(),
-    )
+pub unsafe extern "C" fn execlp(path: CPath, mut argv: VaList) -> ! {
+    exec(path.to_path_buf(), argv.into_vec(), env::vars().collect())
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn execvpe(file: FfiStr, argv: CArray<FfiStr>, envp: CArray<FfiStr>) -> ! {
-    exec(
-        file.as_str().to_owned().into(),
-        argv.to_vec(|arg| arg.as_str().to_owned()),
-        envp.to_vec(|env| {
-            let (key, value) = env
-                .as_str()
-                .to_owned()
-                .splitn(1, ':')
-                .map(|part| Some(part.to_owned()))
-                .tuples()
-                .next()
-                .unwrap_or((None, None));
+pub unsafe extern "C" fn execle(path: CPath, mut argv: VaList, envp: Envp) -> ! {
+    exec(path.to_path_buf(), argv.into_vec(), envp.to_hash_map())
+}
 
-            if key.is_some() && value.is_some() {
-                Some((key.unwrap(), value.unwrap()))
-            } else {
-                None
-            }
-        })
-        .into_iter()
-        .filter_map(|pair| pair)
-        .collect(),
-    )
+#[no_mangle]
+pub unsafe extern "C" fn execv(path: CPath, argv: Argv) -> ! {
+    exec(path.to_path_buf(), argv.to_vec(), env::vars().collect())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn execvp(path: CPath, argv: Argv) -> ! {
+    exec(path.to_path_buf(), argv.to_vec(), env::vars().collect())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn execvpe(path: CPath, argv: Argv, envp: Envp) -> ! {
+    exec(path.to_path_buf(), argv.to_vec(), envp.to_hash_map())
 }
 
 fn exec(program: PathBuf, mut args: Vec<String>, mut env: HashMap<String, String>) -> ! {

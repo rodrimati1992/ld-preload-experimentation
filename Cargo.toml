@@ -5,7 +5,6 @@ authors = ["kalmari"]
 edition = "2018"
 
 [dependencies]
-ffi-support = "*"
 goblin = "*"
 itertools = "*"
 libc = "*"
