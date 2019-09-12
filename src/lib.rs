@@ -59,18 +59,15 @@ pub struct Argv<'a> {
 
 impl<'a> Argv<'a> {
     pub fn to_vec(&self) -> Vec<String> {
-        let mut i = 0isize;
         let mut buffer = Vec::new();
 
-        loop {
-            match unsafe { self.data.offset(i).as_ref() } {
-                Some(&val) => {
+        for i in 0.. {
+            match unsafe { (*self.data.offset(i)).as_ref() } {
+                Some(val) => {
                     buffer.push(unsafe { CStr::from_ptr(val) }.to_string_lossy().to_string())
                 }
                 None => break,
             }
-
-            i += 1;
         }
 
         buffer
@@ -85,30 +82,25 @@ pub struct Envp<'a> {
 
 impl<'a> Envp<'a> {
     pub fn to_hash_map(&self) -> HashMap<String, String> {
-        let mut i = 0isize;
         let mut map = HashMap::new();
 
-        unsafe {
-            loop {
-                match self.data.offset(i).as_ref() {
-                    Some(&val) => {
-                        let (key, val) = CString::from_raw(val)
-                            .to_string_lossy()
-                            .to_string()
-                            .splitn(1, ':')
-                            .map(|part| Some(part.to_owned()))
-                            .tuples()
-                            .next()
-                            .unwrap_or((None, None));
+        for i in 0.. {
+            match unsafe { (*self.data.offset(i)).as_ref() } {
+                Some(val) => {
+                    let (key, val) = unsafe { CStr::from_ptr(val) }
+                        .to_string_lossy()
+                        .to_string()
+                        .splitn(1, ':')
+                        .map(|part| Some(part.to_owned()))
+                        .tuples()
+                        .next()
+                        .unwrap_or((None, None));
 
-                        if key.is_some() && val.is_some() {
-                            map.insert(key.unwrap(), val.unwrap());
-                        }
+                    if key.is_some() && val.is_some() {
+                        map.insert(key.unwrap(), val.unwrap());
                     }
-                    None => break,
                 }
-
-                i += 1;
+                None => break,
             }
         }
 
