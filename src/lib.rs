@@ -12,34 +12,6 @@ use std::{
     mem,
     path::PathBuf,
 };
-use va_list::VaList;
-
-trait VaListArgvExt {
-    fn into_vec(&mut self) -> Vec<String>;
-}
-
-impl VaListArgvExt for VaList {
-    fn into_vec(&mut self) -> Vec<String> {
-        let mut buffer = Vec::new();
-
-        loop {
-            let ptr = unsafe { self.get::<*const c_char>() };
-
-            if !ptr.is_null() {
-                buffer.push(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().to_string());
-            } else {
-                break;
-            }
-        }
-
-        buffer
-    }
-}
-
-pub enum PathOrFile {
-    File(String),
-    Path(PathBuf),
-}
 
 #[repr(transparent)]
 pub struct CBuf<'a> {
@@ -48,21 +20,11 @@ pub struct CBuf<'a> {
 }
 
 impl<'a> CBuf<'a> {
-    pub fn to_file(&self) -> PathOrFile {
-        PathOrFile::File(
-            unsafe { CStr::from_ptr(self.data) }
-                .to_string_lossy()
-                .to_string(),
-        )
-    }
-
-    pub fn to_path(&self) -> PathOrFile {
-        PathOrFile::Path(
-            unsafe { CStr::from_ptr(self.data) }
-                .to_string_lossy()
-                .to_string()
-                .into(),
-        )
+    pub fn to_path(&self) -> PathBuf {
+        unsafe { CStr::from_ptr(self.data) }
+            .to_string_lossy()
+            .to_string()
+            .into()
     }
 }
 
@@ -96,7 +58,7 @@ pub struct Envp<'a> {
 }
 
 impl<'a> Envp<'a> {
-    pub fn to_hash_map(&self) -> HashMap<String, String> {
+    pub fn to_map(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
 
         for i in 0.. {
@@ -124,62 +86,20 @@ impl<'a> Envp<'a> {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn execl(path: CBuf, mut argv: VaList) -> ! {
-    print!("execl");
-    exec(path.to_path(), argv.into_vec(), env::vars().collect())
-}
+pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) -> ! {
+    let path = path.to_path();
+    let mut args = args.to_vec();
+    let mut env = env.to_map();
 
-#[no_mangle]
-pub unsafe extern "C" fn execlp(path: CBuf, mut argv: VaList) -> ! {
-    print!("execlp");
-    exec(path.to_file(), argv.into_vec(), env::vars().collect())
-}
+    println!("pre-inject-path: {}", path.display());
+    println!("pre-inject-args: {}", args.join(" "));
 
-#[no_mangle]
-pub unsafe extern "C" fn execle(path: CBuf, mut argv: VaList, envp: Envp) -> ! {
-    print!("execle");
-    exec(path.to_path(), argv.into_vec(), envp.to_hash_map())
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn execv(path: CBuf, argv: Argv) -> ! {
-    print!("execv");
-    exec(path.to_path(), argv.to_vec(), env::vars().collect())
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn execve(path: CBuf, argv: Argv, envp: Envp) -> ! {
-    print!("execve");
-    exec(path.to_path(), argv.to_vec(), envp.to_hash_map())
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn execvp(path: CBuf, argv: Argv) -> ! {
-    print!("execvp");
-    exec(path.to_file(), argv.to_vec(), env::vars().collect())
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn execvpe(path: CBuf, argv: Argv, envp: Envp) -> ! {
-    print!("execvpe");
-    exec(path.to_file(), argv.to_vec(), envp.to_hash_map())
-}
-
-fn exec(program: PathOrFile, mut args: Vec<String>, mut env: HashMap<String, String>) -> ! {
-    let program = match program {
-        PathOrFile::File(file) => which::which(file).expect("cannot find program"),
-        PathOrFile::Path(path) => path,
-    };
-
-    println!(": {:?}", program);
-    println!("    args: {}", args.join(" "));
-
-    let mut file = File::open(&program).expect("failed open file");
+    let mut file = File::open(&path).expect("missing or permission denied");
     let mut buffer = Vec::new();
 
-    file.read_to_end(&mut buffer).expect("failed to read elf");
+    file.read_to_end(&mut buffer).expect("failed to read");
 
-    let arch = match Object::parse(&buffer).expect("unable to parse elf") {
+    let arch = match Object::parse(&buffer).expect("unable to parse as elf") {
         Object::Elf(elf) => match elf.header.e_machine {
             0x03 => "x86",
             0x3E => "x86_64",
@@ -190,34 +110,36 @@ fn exec(program: PathOrFile, mut args: Vec<String>, mut env: HashMap<String, Str
         _ => panic!("cannot execute"),
     };
 
-    let target_path = if arch == env::consts::ARCH {
-        format!("{}", program.display())
+    let path = if arch == env::consts::ARCH {
+        path
     } else {
         let sysroot = path!("opt" | "pmbm" | arch);
         let qemu_ld_prefix = path!(sysroot | "lib");
 
-        args.insert(0, format!("{}", program.display()));
+        args.insert(0, format!("{}", path.display()));
 
         env.insert(
             "QEMU_LD_PREFIX".to_owned(),
             format!("{}", qemu_ld_prefix.into_pathbuf().display()),
         );
 
-        format!("qemu-{}-static", arch)
+        which::which(format!("qemu-{}-static", arch)).expect("please install qemu-user-static")
     };
 
-    println!("    post-exec: {:?}", program);
-    println!("    post-args: {}", args.join(" "));
+    println!("post-inject-path: {}", path.display());
+    println!("post-inject-path: {}", args.join(" "));
 
-    let argv0 = CString::new(target_path).unwrap().as_ptr() as *const c_char;
+    let path = CString::new(format!("{}", path.display()))
+        .unwrap()
+        .as_ptr() as *const c_char;
 
-    let argv = args
+    let args = args
         .into_iter()
         .map(|arg| CString::new(arg).unwrap().as_ptr() as *const c_char)
         .collect::<Vec<*const c_char>>()
         .as_ptr() as *const *const c_char;
 
-    let envp = env
+    let env = env
         .into_iter()
         .map(|(key, value)| {
             CString::new(format!("{}={}", key, value)).unwrap().as_ptr() as *const c_char
@@ -239,6 +161,6 @@ fn exec(program: PathOrFile, mut args: Vec<String>, mut env: HashMap<String, Str
             libc::RTLD_NEXT as *mut _,
             "execve\0".as_ptr() as *const _,
         ))
-        .unwrap()(argv0, argv, envp)
+        .unwrap()(path, args, env)
     }
 }
