@@ -1,86 +1,15 @@
 use goblin::Object;
-use itertools::Itertools;
 use libc::{c_char, c_int};
 use path_dsl::path;
-use std::{
-    collections::HashMap,
-    env,
-    ffi::{CStr, CString},
-    fs::File,
-    io::Read,
-    marker::PhantomData,
-    path::PathBuf,
-    ptr,
-};
+use std::{ffi::CString, fs::File, io::Read, ptr};
 
-#[repr(transparent)]
-pub struct CBuf<'a> {
-    data: *mut c_char,
-    _ghost: PhantomData<&'a ()>,
-}
+mod args;
+mod env;
+mod path;
 
-impl<'a> CBuf<'a> {
-    pub fn to_path(&self) -> PathBuf {
-        unsafe { CStr::from_ptr(self.data) }
-            .to_string_lossy()
-            .to_string()
-            .into()
-    }
-}
-
-#[repr(transparent)]
-pub struct Argv<'a> {
-    data: *const *mut c_char,
-    _ghost: PhantomData<&'a ()>,
-}
-
-impl<'a> Argv<'a> {
-    pub fn to_vec(&self) -> Vec<String> {
-        let mut buffer = Vec::new();
-
-        for i in 0.. {
-            match unsafe { (*self.data.offset(i)).as_ref() } {
-                Some(val) => {
-                    buffer.push(unsafe { CStr::from_ptr(val) }.to_string_lossy().to_string())
-                }
-                None => break,
-            }
-        }
-
-        buffer
-    }
-}
-
-#[repr(transparent)]
-pub struct Envp<'a> {
-    data: *const *mut c_char,
-    _ghost: PhantomData<&'a ()>,
-}
-
-impl<'a> Envp<'a> {
-    pub fn to_map(&self) -> HashMap<String, String> {
-        let mut map = HashMap::new();
-
-        for i in 0.. {
-            match unsafe { (*self.data.offset(i)).as_ref() } {
-                Some(val) => {
-                    let (key, val) = unsafe { CStr::from_ptr(val) }
-                        .to_string_lossy()
-                        .to_string()
-                        .splitn(2, '=')
-                        .map(|part| part.to_owned())
-                        .next_tuple()
-                        .unwrap();
-
-                    map.insert(key, val);
-                }
-                None => break,
-            }
-        }
-
-        map
-    }
-}
+pub use args::Args;
+pub use env::Env;
+pub use path::Path;
 
 pub fn real_execve(
     path: *const c_char,
@@ -103,7 +32,7 @@ pub fn real_execve(
 }
 
 #[no_mangle]
-pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) -> c_int {
+pub extern "C" fn execve(path: Path, args: Args, env: Env) -> c_int {
     let path = path.to_path();
     let mut args = args.to_vec();
     let mut env = env.to_map();
@@ -133,7 +62,7 @@ pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) -> c_int {
         _ => return libc::ENOEXEC,
     };
 
-    let path = if arch == env::consts::ARCH {
+    let path = if arch == std::env::consts::ARCH {
         path
     } else {
         let sysroot = path!("opt" | "pmbm" | arch);
