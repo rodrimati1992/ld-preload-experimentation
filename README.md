@@ -1,4 +1,4 @@
-## `https://github.com/kalmari246/poor-mans-binfmt-misc`
+## `poor-mans-binfmt-misc`
 
 wip project
 
