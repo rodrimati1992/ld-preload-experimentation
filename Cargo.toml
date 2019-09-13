@@ -1,6 +1,6 @@
 [package]
 name = "poor-mans-binfmt-misc"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["kalmari"]
 edition = "2018"
 
@@ -8,11 +8,12 @@ edition = "2018"
 goblin = "*"
 itertools = "*"
 libc = "*"
-libloading = "*"
 path-dsl = "*"
-va_list = "*"
 which = "*"
 
 [lib]
 name = "pmbm"
 crate_type = ["dylib"]
+
+[profile.release]
+debug = true

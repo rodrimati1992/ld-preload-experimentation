@@ -1,7 +1,6 @@
 use goblin::Object;
 use itertools::Itertools;
 use libc::{c_char, c_int};
-use libloading::os::unix::{Library, Symbol};
 use path_dsl::path;
 use std::{
     collections::HashMap,
@@ -11,6 +10,7 @@ use std::{
     io::Read,
     marker::PhantomData,
     path::PathBuf,
+    ptr,
 };
 
 #[repr(transparent)]
@@ -67,15 +67,12 @@ impl<'a> Envp<'a> {
                     let (key, val) = unsafe { CStr::from_ptr(val) }
                         .to_string_lossy()
                         .to_string()
-                        .splitn(1, ':')
-                        .map(|part| Some(part.to_owned()))
-                        .tuples()
-                        .next()
-                        .unwrap_or((None, None));
+                        .splitn(2, '=')
+                        .map(|part| part.to_owned())
+                        .next_tuple()
+                        .unwrap();
 
-                    if key.is_some() && val.is_some() {
-                        map.insert(key.unwrap(), val.unwrap());
-                    }
+                    map.insert(key, val);
                 }
                 None => break,
             }
@@ -85,29 +82,55 @@ impl<'a> Envp<'a> {
     }
 }
 
+pub fn real_execve(
+    path: *const c_char,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> c_int {
+    unsafe {
+        let symbol = CString::new("execve").unwrap();
+        let raw = libc::dlsym(libc::RTLD_NEXT, symbol.as_ptr());
+        let fun = std::mem::transmute::<
+            *const _,
+            unsafe extern "C" fn(
+                *const c_char,
+                *const *const c_char,
+                *const *const c_char,
+            ) -> c_int,
+        >(raw);
+        fun(path, argv, envp)
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) -> c_int {
     let path = path.to_path();
     let mut args = args.to_vec();
     let mut env = env.to_map();
 
-    println!("pre-inject-path: {}", path.display());
-    println!("pre-inject-args: {}", args.join(" "));
+    let mut file = match File::open(&path) {
+        Ok(file) => file,
+        Err(_) => return libc::EACCES,
+    };
 
-    let mut file = File::open(&path).expect("missing or permission denied");
     let mut buffer = Vec::new();
 
-    file.read_to_end(&mut buffer).expect("failed to read");
+    match file.read_to_end(&mut buffer) {
+        Err(_) => return libc::EACCES,
+        _ => (),
+    }
 
-    let arch = match Object::parse(&buffer).expect("unable to parse as elf") {
-        Object::Elf(elf) => match elf.header.e_machine {
+    let arch = match Object::parse(&buffer) {
+        Ok(Object::Elf(elf)) => match elf.header.e_machine {
             0x03 => "x86",
             0x3E => "x86_64",
             0x28 => "arm",
             0xB7 => "aarch64",
-            _ => panic!("invalid architecture"),
+            _ => return libc::ENOEXEC,
         },
-        _ => panic!("cannot execute"),
+        // Handle shebangs
+        // Err(_) =>
+        _ => return libc::ENOEXEC,
     };
 
     let path = if arch == env::consts::ARCH {
@@ -120,6 +143,7 @@ pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) -> c_int {
 
         args.insert(0, format!("{}", qemu.display()));
 
+        env.remove("LD_PRELOAD");
         env.insert(
             "QEMU_LD_PREFIX".to_owned(),
             format!("{}", qemu_ld_prefix.into_pathbuf().display()),
@@ -128,38 +152,25 @@ pub extern "C" fn execve(path: CBuf, args: Argv, env: Envp) -> c_int {
         qemu
     };
 
-    println!("post-inject-path: {}", path.display());
-    println!("post-inject-path: {}", args.join(" "));
+    let path = CString::new(format!("{}", path.display())).unwrap();
 
-    let path = CString::new(format!("{}", path.display()))
-        .unwrap()
-        .as_ptr() as *const c_char;
-
-    let args = args
+    let args: Vec<_> = args
         .into_iter()
-        .map(|arg| CString::new(arg).unwrap().as_ptr() as *const c_char)
-        .collect::<Vec<*const c_char>>()
-        .as_ptr() as *const *const c_char;
+        .map(|arg| CString::new(arg).unwrap())
+        .collect();
 
-    let env = env
+    let mut args: Vec<_> = args.iter().map(|arg| arg.as_ptr()).collect();
+
+    args.push(ptr::null());
+
+    let env: Vec<_> = env
         .into_iter()
-        .map(|(key, value)| {
-            CString::new(format!("{}={}", key, value)).unwrap().as_ptr() as *const c_char
-        })
-        .collect::<Vec<*const c_char>>()
-        .as_ptr() as *const *const c_char;
+        .map(|(key, value)| CString::new(format!("{}={}", key, value)).unwrap())
+        .collect();
 
-    let this = Library::this();
+    let mut env: Vec<_> = env.iter().map(|env| env.as_ptr()).collect();
 
-    unsafe {
-        let real: Symbol<
-            unsafe extern "C" fn(
-                *const c_char,
-                *const *const c_char,
-                *const *const c_char,
-            ) -> c_int,
-        > = this.get(b"execve\0").unwrap();
+    env.push(ptr::null());
 
-        real(path, args, env)
-    }
+    real_execve(path.as_ptr(), args.as_ptr(), env.as_ptr())
 }
