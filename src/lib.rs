@@ -17,8 +17,8 @@ pub fn real_execve(
     envp: *const *const c_char,
 ) -> c_int {
     unsafe {
-        let symbol = CString::new("execve").unwrap();
-        let raw = libc::dlsym(libc::RTLD_NEXT, symbol.as_ptr());
+        let sym = b"execve\0";
+        let raw = libc::dlsym(libc::RTLD_NEXT, sym.as_ptr() as *const _);
         let fun = std::mem::transmute::<
             *const _,
             unsafe extern "C" fn(

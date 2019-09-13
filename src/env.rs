@@ -1,4 +1,3 @@
-use itertools::Itertools;
 use libc::c_char;
 use std::{collections::HashMap, ffi::CStr, marker::PhantomData};
 
@@ -18,15 +17,18 @@ impl<'a> Env<'a> {
         for i in 0.. {
             match unsafe { (*self.data.offset(i)).as_ref() } {
                 Some(val) => {
-                    let (key, val) = unsafe { CStr::from_ptr(val) }
+                    match unsafe { CStr::from_ptr(val) }
                         .to_string_lossy()
                         .to_string()
                         .splitn(2, '=')
-                        .map(|part| part.to_owned())
-                        .next_tuple()
-                        .unwrap();
-
-                    map.insert(key, val);
+                        .collect::<Vec<_>>()
+                        .as_slice()
+                    {
+                        [key, val] => {
+                            map.insert(key.to_string(), val.to_string());
+                        }
+                        _ => (),
+                    }
                 }
                 None => break,
             }
