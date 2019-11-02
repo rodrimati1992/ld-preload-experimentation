@@ -1,8 +1,8 @@
 ## `poor-mans-binfmt-misc`
 
-wip project
-
 run programs from other architectures without prefixing it with qemu
+
+most likely will break
 
 ### install
 
