@@ -1,18 +1,18 @@
 [package]
-name = "poor-mans-binfmt-misc"
-version = "0.0.2"
+name    = "libkql"
+version = "0.0.3"
 authors = ["kalmari"]
 edition = "2018"
 
-[dependencies]
-goblin = "*"
-libc = "*"
-path-dsl = "*"
-which = "*"
-
 [lib]
-name = "pmbm"
-crate_type = ["dylib"]
+crate-type = ["cdylib"]
+
+[dependencies]
+failure         = "0.1.6"
+goblin          = "0.0.24"
+libc            = "0.2.65"
+null-terminated = "0.3.9"
+which           = "3.0.0"
 
 [profile.release]
-debug = true
+lto = true
