@@ -1,5 +1,5 @@
 [package]
-name    = "libkql"
+name    = "kql"
 version = "0.0.3"
 authors = ["kalmari"]
 edition = "2018"
