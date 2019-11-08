@@ -1,4 +1,4 @@
-just me messing with ld-preload and qemu
+experimentation with ld-preload and qemu
 
 ```rust
 git clone https://github.com/kalmari246/kql
