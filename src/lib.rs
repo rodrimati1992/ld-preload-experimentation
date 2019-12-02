@@ -1,19 +1,13 @@
 use {
     goblin::Object,
-    libc::{c_char, c_int, dlsym, EACCES, ENOEXEC, RTLD_NEXT},
+    libc::{c_char, c_int, dlsym, ENOEXEC, RTLD_NEXT},
     null_terminated::{Nul, NulStr},
     std::{
         collections::{HashMap, VecDeque},
-        env,
-        ffi::{CStr, CString, OsStr, OsString},
-        fs,
-        io::Read,
-        iter,
-        marker::PhantomData,
-        mem,
-        os::unix::ffi::{OsStrExt, OsStringExt},
-        path::{Path, PathBuf},
-        ptr, slice,
+        ffi::CString,
+        fs, iter, mem,
+        path::PathBuf,
+        ptr,
     },
 };
 
@@ -82,7 +76,7 @@ pub unsafe extern "C" fn execve(path: &NulStr, argv: &Nul<&NulStr>, envp: &Nul<&
             .as_ptr(),
     );
 
-    let mut execve = match mem::transmute::<
+    let execve = match mem::transmute::<
         *const _,
         Option<
             unsafe extern "C" fn(
