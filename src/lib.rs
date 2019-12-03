@@ -13,8 +13,15 @@ use {
 
 #[no_mangle]
 pub unsafe extern "C" fn execve(path: &NulStr, argv: &Nul<&NulStr>, envp: &Nul<&NulStr>) -> c_int {
+    fn push_front(argv_prefix:&mut VecDeque<CString>,s:&str){
+        if let Ok(cs)=CString::new(s) {
+            argv_prefix.push_front(cs);
+        }
+    }
+
     let mut path = PathBuf::from(&path.to_string());
-    let mut argv_prefix = VecDeque::<String>::new();
+    let mut argv_prefix = VecDeque::<CString>::new();
+
 
     let mut elf = File::open(&path).unwrap();
 
@@ -33,8 +40,8 @@ pub unsafe extern "C" fn execve(path: &NulStr, argv: &Nul<&NulStr>, envp: &Nul<&
 
     let mut filtered_out_keys=Vec::<&'static str>::new();
     if arch != std::env::consts::ARCH {
-        argv_prefix.push_front(path.display().to_string());
-        argv_prefix.push_front("-0".to_string());
+        push_front(&mut argv_prefix,&path.display().to_string());
+        push_front(&mut argv_prefix,"-0");
 
         path = PathBuf::from(format!("/bin/qemu-{}", arch));
 
@@ -42,11 +49,6 @@ pub unsafe extern "C" fn execve(path: &NulStr, argv: &Nul<&NulStr>, envp: &Nul<&
     }
 
     let path = CString::new(path.display().to_string()).unwrap();
-
-    let argv_prefix: Vec<CString> = argv_prefix
-        .iter()
-        .flat_map(|arg| CString::new(arg.as_str()) )
-        .collect();
 
     let argv: Vec<*const c_char> = argv_prefix
         .iter()
