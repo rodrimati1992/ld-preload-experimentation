@@ -3,7 +3,7 @@ use {
     libc::{c_char, c_int, dlsym, ENOEXEC, RTLD_NEXT},
     null_terminated::{Nul, NulStr},
     std::{
-        collections::{HashMap, VecDeque},
+        collections::VecDeque,
         ffi::CString,
         fs::File, iter, mem,
         path::PathBuf,
@@ -14,15 +14,7 @@ use {
 #[no_mangle]
 pub unsafe extern "C" fn execve(path: &NulStr, argv: &Nul<&NulStr>, envp: &Nul<&NulStr>) -> c_int {
     let mut path = PathBuf::from(&path.to_string());
-    let mut argv: VecDeque<String> = argv.iter().map(|arg| arg.to_string()).collect();
-    let mut envp: HashMap<_, _> = envp
-        .iter()
-        .flat_map(|env| {
-            let env = env.to_string();
-            let mut split = env.splitn(2, '=');
-            Some((split.next()?.to_string(), split.next()?.to_string()))
-        })
-        .collect();
+    let mut argv_prefix = VecDeque::<String>::new();
 
     let mut elf = File::open(&path).unwrap();
 
@@ -39,27 +31,37 @@ pub unsafe extern "C" fn execve(path: &NulStr, argv: &Nul<&NulStr>, envp: &Nul<&
         _ => return ENOEXEC,
     };
 
+    let mut filtered_out_keys=Vec::<&'static str>::new();
     if arch != std::env::consts::ARCH {
-        argv.push_front(path.display().to_string());
-        argv.push_front("-0".to_string());
+        argv_prefix.push_front(path.display().to_string());
+        argv_prefix.push_front("-0".to_string());
 
         path = PathBuf::from(format!("/bin/qemu-{}", arch));
 
-        envp.remove("LD_PRELOAD");
+        filtered_out_keys.push("LD_PRELOAD");
     }
 
     let path = CString::new(path.display().to_string()).unwrap();
 
-    let argv: Vec<CString> = argv.into_iter().flat_map(|arg| CString::new(arg)).collect();
-
-    let argv: Vec<*const c_char> = argv
+    let argv_prefix: Vec<CString> = argv_prefix
         .iter()
-        .map(|arg| arg.as_ptr())
+        .flat_map(|arg| CString::new(arg.as_str()) )
+        .collect();
+
+    let argv: Vec<*const c_char> = argv_prefix
+        .iter()
+        .map(|arg:&CString| arg.as_ptr())
+        .chain( argv.iter().copied().map(|arg:&NulStr| arg.as_ptr() as *const c_char ) )
         .chain(iter::once(ptr::null()))
         .collect();
 
     let envp: Vec<CString> = envp
         .iter()
+        .filter_map(|env| {
+            let mut split = env[..].splitn(2, '=');
+            Some((split.next()?, split.next()?))
+        })
+        .filter(|(k,_)| !filtered_out_keys.contains(k) )
         .flat_map(|(key, value)| CString::new(format!("{}={}", key, value)))
         .collect();
 
