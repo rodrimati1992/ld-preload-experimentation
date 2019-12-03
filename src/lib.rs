@@ -1,11 +1,11 @@
 use {
-    goblin::Object,
+    goblin::elf::header::header64::Header,
     libc::{c_char, c_int, dlsym, ENOEXEC, RTLD_NEXT},
     null_terminated::{Nul, NulStr},
     std::{
         collections::{HashMap, VecDeque},
         ffi::CString,
-        fs, iter, mem,
+        fs::File, iter, mem,
         path::PathBuf,
         ptr,
     },
@@ -24,14 +24,14 @@ pub unsafe extern "C" fn execve(path: &NulStr, argv: &Nul<&NulStr>, envp: &Nul<&
         })
         .collect();
 
-    let elf = fs::read(&path).unwrap();
+    let mut elf = File::open(&path).unwrap();
 
-    let elf = match Object::parse(&elf) {
-        Ok(Object::Elf(elf)) => elf,
-        _ => return ENOEXEC,
+    let header = match Header::from_fd(&mut elf) {
+        Ok(header) => header,
+        _=> return ENOEXEC,
     };
 
-    let arch = match elf.header.e_machine {
+    let arch = match header.e_machine {
         0x03 => "i386",
         0x3e => "x86_64",
         0x28 => "arm",
